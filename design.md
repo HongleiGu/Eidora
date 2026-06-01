@@ -363,10 +363,134 @@ the file-level `visibility` field.
 
 ---
 
+## Multi-user model
+
+Eidora has three layers. **Authoring** produces a reusable template; a group **forks**
+it into their own playable copy; each play sitting is a **session** that overlays
+runtime state without mutating the copy.
+
+| Layer | Table | What it is | Owned by | Edited in |
+|---|---|---|---|---|
+| **Project (template)** | `projects` (kind=`template`) | The authored world: entities, scenarios, lore | An author (`owner_id`) | Studio |
+| **Campaign** | `projects` (kind=`campaign`, `forked_from` set) | A group's playable fork of a template | The group (via `project_members`) | Studio + Play |
+| **Session** | `sessions` | One play sitting: chat log + live state | The group | Play surface |
+
+A **campaign is just a project** with `kind=campaign` and `forked_from` pointing at
+the source template. This means entities/worlds/relations tables stay unchanged
+(always keyed by `project_id`), and the existing Studio + entity CRUD work on a
+campaign with zero modification. Forking deep-copies the template's entities into
+the new campaign project.
+
+Runtime play state (who's dead, what's discovered) lives in `session_state` /
+`session_flags` as overlays on the campaign's entities — the campaign's base
+entities are never mutated, so a campaign can be replayed.
+
+### Discord analogy
+
+- **Project/template** ≈ a server *template*
+- **Campaign** ≈ a server / guild (your party + your copy of the world)
+- **Session** ≈ a channel / live play call
+
+### New & modified tables
+
+```
+profiles                       -- 1:1 mirror of auth.users
+  id            uuid pk = auth.uid()
+  handle        text unique
+  display_name  text
+  avatar_url    text
+
+projects        (MODIFIED)
+  + owner_id     uuid → profiles      -- creator
+  + kind         text   'template' | 'campaign'
+  + forked_from  uuid → projects      -- null for templates
+  + visibility   text   'private' | 'unlisted' | 'public'
+
+project_members (NEW)               -- membership + roles for BOTH templates and campaigns
+  project_id  uuid → projects
+  user_id     uuid → profiles
+  role        text   'admin' | 'gm' | 'player'
+  added_at    timestamptz
+  pk (project_id, user_id)
+
+sessions        (UNCHANGED shape)    -- project_id IS the campaign
+entities, worlds, relations          -- UNCHANGED (always project_id)
+session_state, session_flags, session_log  -- UNCHANGED
+```
+
+### Roles
+
+| Role | Can |
+|---|---|
+| `admin` | Manage members & settings, delete the campaign. A template's owner is its sole admin. |
+| `gm` | Run sessions, see `gm_only` content, edit entities, control state |
+| `player` | Play, see `public` content only |
+
+### Template visibility
+
+| Value | Who sees it | Forkable by |
+|---|---|---|
+| `private` | Owner + members only | Members |
+| `unlisted` | Anyone with the link | Anyone with link |
+| `public` | Listed in the public gallery | Anyone |
+
+### Auth & RLS strategy
+
+- **Supabase Auth** for accounts (email + OAuth later). `profiles` mirrors `auth.users`.
+- **Shift from service-role-everywhere to user-scoped clients.** User-facing API
+  routes use a request-scoped Supabase client (the user's JWT from cookies via
+  `@supabase/ssr`), so **RLS enforces access**. The service-role client is kept only
+  for admin scripts (`setup-db`, seeding).
+- RLS policy sketch:
+  - `projects` SELECT: `owner_id = auth.uid()` OR member OR `visibility in ('public','unlisted')`
+  - `projects` UPDATE/DELETE: owner OR `admin` member
+  - `entities/worlds/relations`: readable if the parent project is readable; writable by `gm`/`admin` members
+  - `sessions/session_*`: restricted to members of the campaign
+  - `gm_only` / `author_only` entity filtering stays **app-level** for now (player-context
+    read filtering already exists in `lib/entities`); can be hardened into RLS later.
+
+### Fork operation
+
+`forkTemplate(templateId, userId)`:
+1. Insert new `projects` row (`kind=campaign`, `forked_from=templateId`, `owner_id=userId`).
+2. Deep-copy the template's `worlds`, `entities`, `relations` into the new project.
+3. Insert `project_members(newProjectId, userId, 'admin')`.
+4. Return the campaign. Done atomically via a Postgres function (`rpc`) for consistency.
+
+### Play surface (future epic)
+
+A campaign's sessions are Discord-like channels: multi-party chat (players +
+GM-agent + narrator + system), live state overlay, flags. Real-time via **Supabase
+Realtime** (broadcast + presence). The agent participates as a bot member — a player
+message triggers a server-side AI call with session context, streamed back into the
+log and broadcast to the channel. Detailed design deferred until the auth/fork
+foundation lands.
+
+---
+
+## Key design decisions
+
+| Decision | Choice | Reason |
+|---|---|---|
+| File format | `.md` + YAML front-matter | Structured front-matter for agent queries; rich markdown body for prose |
+| IDs | Filename slug | No UUID generation; human-readable; stable references |
+| Relations | Separate `relations/` folder | Avoids circular references on entity load; one file per source |
+| Stats/game data | `game_meta:` block | Separates narrative from game-mechanical; block absent = pure story entity |
+| Session state | Diff overlay in `sessions/` | Base entities stay pristine; new session = new folder |
+| Lore | Single `lore/` folder typed by `type:` | Avoids proliferating thin folders (factions/, events/, etc.) |
+| World | One `world.md` per project | Timelines/universes as sub-configs inside world.md, not separate files |
+| Assets | Top-level `assets/` folder | Keeps content dirs scannable; referenced by path string in front-matter |
+| Storage | Supabase (cloud) is runtime; folders are export/import | Multiplayer needs a server; local files can't be shared by a live group |
+| Template → play | Fork & own (deep copy into group-owned campaign) | Isolation; group customizes freely; editing a template never breaks a live game |
+| Campaign = project | A campaign is a `projects` row with `forked_from` | Reuses entity tables + Studio unchanged; no parallel schema |
+| Ownership | Group owns the campaign; admin is a role | Campaign survives when the admin leaves |
+
+---
+
 ## Out of scope (for now)
 
 - Multi-world projects
 - Cross-project entity reuse / shared character libraries
-- Real-time multiplayer sessions
 - Asset storage / CDN
 - Schema versioning and migration
+- Snapshot/copy-on-write template updates flowing into existing campaigns
