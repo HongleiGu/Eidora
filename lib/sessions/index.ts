@@ -105,6 +105,26 @@ export async function setEntityOverride(
   if (error) throw new Error(error.message);
 }
 
+export interface EntityOverrideRow {
+  entityType: EntityType;
+  slug: string;
+  overrides: Record<string, unknown>;
+}
+
+export async function listOverrides(sessionId: string): Promise<EntityOverrideRow[]> {
+  const db = await createSsrClient();
+  const { data, error } = await db
+    .from('session_state')
+    .select('entity_type, entity_slug, overrides')
+    .eq('session_id', sessionId);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r) => ({
+    entityType: r.entity_type as EntityType,
+    slug: r.entity_slug as string,
+    overrides: (r.overrides ?? {}) as Record<string, unknown>,
+  }));
+}
+
 // ── Flags ─────────────────────────────────────────────────────────────────────
 
 export async function setFlag(sessionId: string, key: string, value: string): Promise<void> {
@@ -154,4 +174,56 @@ export async function getLog(sessionId: string): Promise<SessionLogEntry[]> {
     .from('session_log').select().eq('session_id', sessionId).order('created_at');
   if (error) throw new Error(error.message);
   return (data ?? []).map(logFromRow);
+}
+
+// ── Reveal system (EID-93) ──────────────────────────────────────────────────
+// A "secret" entity (front_matter.reveal === 'secret') stays hidden from players
+// until revealed during a session. Reveal is manual — a human GM or an AI GM
+// calls revealEntity. Revealed-state is stored as a session flag so it's
+// per-playthrough and never mutates the base entity.
+
+function revealKey(entityType: EntityType, slug: string): string {
+  return `reveal:${entityType}:${slug}`;
+}
+
+export async function revealEntity(sessionId: string, entityType: EntityType, slug: string): Promise<void> {
+  await setFlag(sessionId, revealKey(entityType, slug), '1');
+}
+
+export async function unrevealEntity(sessionId: string, entityType: EntityType, slug: string): Promise<void> {
+  const db = await createSsrClient();
+  const { error } = await db
+    .from('session_flags')
+    .delete()
+    .eq('session_id', sessionId)
+    .eq('key', revealKey(entityType, slug));
+  if (error) throw new Error(error.message);
+}
+
+export async function isRevealed(sessionId: string, entityType: EntityType, slug: string): Promise<boolean> {
+  return (await getFlag(sessionId, revealKey(entityType, slug))) != null;
+}
+
+/** All reveal flag keys set in a session, as a Set of "type:slug". */
+export async function listRevealed(sessionId: string): Promise<Set<string>> {
+  const flags = await getFlags(sessionId);
+  const out = new Set<string>();
+  for (const key of Object.keys(flags)) {
+    if (key.startsWith('reveal:')) out.add(key.slice('reveal:'.length));
+  }
+  return out;
+}
+
+/**
+ * Whether an entity is visible to a player right now, given the set of revealed
+ * "type:slug" keys for the current session. gm_only/author_only never reach
+ * players; a public secret is visible only once revealed.
+ */
+export function visibleToPlayer(
+  entity: Pick<Entity, 'entityType' | 'slug' | 'visibility'> & { reveal?: string },
+  revealedKeys: Set<string>,
+): boolean {
+  if (entity.visibility !== 'public') return false;
+  if (entity.reveal === 'secret') return revealedKeys.has(`${entity.entityType}:${entity.slug}`);
+  return true;
 }

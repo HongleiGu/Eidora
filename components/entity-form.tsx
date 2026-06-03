@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import ImageUploadField from "./image-upload-field";
 
 type EntityType = "character" | "location" | "artifact" | "lore" | "document" | "scenario";
 type Visibility = "public" | "gm_only" | "author_only";
@@ -294,6 +295,30 @@ export default function EntityForm({
           </select>
         </Field>
       </div>
+
+      {/* Image */}
+      <ImageUploadField
+        projectSlug={projectSlug}
+        url={fm.image as string | undefined}
+        imageKey={fm.imageKey as string | undefined}
+        suggestedPrompt={name ? `${name} — ${entityType}` : ""}
+        onChange={({ url, key }) => {
+          setFmKey("image", url);
+          setFmKey("imageKey", key);
+        }}
+      />
+
+      {/* Reveal (play-time gate) */}
+      <Field label="Reveal" hint="When players can see this during a session">
+        <select
+          className={selectClass}
+          value={(fm.reveal as string) ?? "public"}
+          onChange={(e) => setFmKey("reveal", e.target.value === "public" ? undefined : e.target.value)}
+        >
+          <option value="public">Public — visible from the start</option>
+          <option value="secret">Secret — hidden until revealed by the GM</option>
+        </select>
+      </Field>
 
       {/* Type-specific fields */}
       {entityType === "character" && <CharacterFields {...fp} />}

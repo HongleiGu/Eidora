@@ -1,6 +1,8 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import Nav from "@/components/nav";
+import ForkButton from "@/components/fork-button";
+import SuggestButton from "@/components/suggest-button";
 import { createSsrClient, getCurrentUser } from "@/lib/supabase/ssr";
 import type { EntityType } from "@/lib/types";
 
@@ -69,15 +71,23 @@ function entityMeta(entity: EntityRow): string[] {
 function EntityRowItem({ entity, projectSlug }: { entity: EntityRow; projectSlug: string }) {
   const meta = entityMeta(entity);
   const type = entity.entity_type as EntityType;
+  const image = typeof entity.front_matter?.image === "string" ? entity.front_matter.image : "";
   const visLabel = entity.visibility === "gm_only" ? "gm"
     : entity.visibility === "author_only" ? "private" : null;
 
   return (
     <Link
       href={`/projects/${projectSlug}/${type}/${entity.slug}`}
-      className="group flex items-center gap-4 border-b border-stone-100 px-6 py-3.5 transition-colors hover:bg-stone-50 last:border-b-0"
+      className="group flex items-center gap-4 border-b border-stone-100 px-6 py-3 transition-colors hover:bg-stone-50 last:border-b-0"
     >
-      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT_COLORS[type] ?? "bg-stone-400"}`} />
+      {image ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={image} alt="" className="h-8 w-8 shrink-0 rounded-sm border border-stone-200 object-cover" />
+      ) : (
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-sm border border-stone-100 bg-stone-50">
+          <span className={`h-1.5 w-1.5 rounded-full ${DOT_COLORS[type] ?? "bg-stone-400"}`} />
+        </span>
+      )}
       <span className="flex-1 text-sm font-medium text-stone-800 group-hover:text-stone-900">
         {entity.name}
       </span>
@@ -113,17 +123,18 @@ export default async function ProjectPage({
 
   const { data: projectData } = await db
     .from("projects")
-    .select("id, slug, name, worlds(name, era, genre, description)")
+    .select("id, slug, name, kind, worlds(name, era, genre, description)")
     .eq("slug", slug)
     .maybeSingle();
 
   if (!projectData) notFound();
 
   const project = projectData as unknown as {
-    id: string; slug: string; name: string;
+    id: string; slug: string; name: string; kind: string;
     worlds: { name: string; era: string | null; genre: string[] | null; description: string | null }[] | null;
   };
   const w = project.worlds?.[0] ?? null;
+  const isTemplate = project.kind === "template";
 
   const { data: entities } = await db
     .from("entities")
@@ -141,6 +152,11 @@ export default async function ProjectPage({
         <div className="mx-auto max-w-5xl px-6 py-8">
           <div className="flex items-start justify-between gap-4">
             <div>
+              <div className="mb-2">
+                <span className={`rounded-sm border px-2 py-0.5 text-xs font-medium ${isTemplate ? "border-stone-300 bg-stone-100 text-stone-600" : "border-rose-200 bg-rose-50 text-rose-700"}`}>
+                  {isTemplate ? "Template" : "Campaign"}
+                </span>
+              </div>
               <h1 className="font-display text-3xl font-semibold text-stone-900">{project.name}</h1>
               {w && (
                 <p className="mt-1 text-sm text-stone-500">
@@ -148,12 +164,27 @@ export default async function ProjectPage({
                 </p>
               )}
             </div>
-            <Link
-              href={`/projects/${slug}/studio`}
-              className="shrink-0 rounded-sm bg-stone-800 px-4 py-2 text-sm font-medium text-stone-50 transition-colors hover:bg-stone-700"
-            >
-              ✶ Open Studio
-            </Link>
+            <div className="flex shrink-0 items-center gap-2">
+              {isTemplate && <ForkButton projectSlug={slug} defaultName={`${project.name} (Campaign)`} />}
+              <Link
+                href={`/projects/${slug}/workspace`}
+                className="rounded-sm border border-stone-300 px-4 py-2 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
+              >
+                ⌗ Workspace
+              </Link>
+              <Link
+                href={`/projects/${slug}/play`}
+                className="rounded-sm border border-stone-300 px-4 py-2 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
+              >
+                ▶ Play
+              </Link>
+              <Link
+                href={`/projects/${slug}/studio`}
+                className="rounded-sm bg-stone-800 px-4 py-2 text-sm font-medium text-stone-50 transition-colors hover:bg-stone-700"
+              >
+                ✶ Open Studio
+              </Link>
+            </div>
           </div>
           {w?.genre && w.genre.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-1.5">
@@ -193,12 +224,23 @@ export default async function ProjectPage({
             {TABS.find((t) => t.type === activeType)?.label}{" "}
             <span className="text-stone-400">({entities?.length ?? 0})</span>
           </h2>
-          <Link
-            href={`/projects/${slug}/${activeType}/new`}
-            className="rounded-sm bg-stone-800 px-3 py-1.5 text-xs font-medium text-stone-50 transition-colors hover:bg-stone-700"
-          >
-            + Add
-          </Link>
+          <div className="flex items-center gap-2">
+            {activeType === "scenario" && (
+              <Link
+                href={`/projects/${slug}/generate`}
+                className="rounded-sm border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-700 transition-colors hover:bg-stone-50"
+              >
+                ✶ Generate
+              </Link>
+            )}
+            <SuggestButton projectSlug={slug} defaultType={activeType} />
+            <Link
+              href={`/projects/${slug}/${activeType}/new`}
+              className="rounded-sm bg-stone-800 px-3 py-1.5 text-xs font-medium text-stone-50 transition-colors hover:bg-stone-700"
+            >
+              + Add
+            </Link>
+          </div>
         </div>
 
         {!entities || entities.length === 0 ? (

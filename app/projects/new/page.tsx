@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Nav from "@/components/nav";
 import NewProjectForm from "@/components/new-project-form";
+import GenerateStoryButton from "@/components/generate-story-button";
 import { getCurrentUser } from "@/lib/supabase/ssr";
 
 export const metadata = { title: "New Project — Eidora" };
@@ -19,6 +20,15 @@ export default async function NewProjectPage() {
             A project holds your world, characters, locations, and scenarios.
           </p>
         </div>
+
+        {/* Out of ideas? Let the AI build the whole thing. */}
+        <div className="mb-6">
+          <GenerateStoryButton />
+        </div>
+        <div className="mb-6 flex items-center gap-3 text-xs text-stone-400">
+          <span className="h-px flex-1 bg-stone-200" /> or start from scratch <span className="h-px flex-1 bg-stone-200" />
+        </div>
+
         <NewProjectForm />
       </main>
     </div>

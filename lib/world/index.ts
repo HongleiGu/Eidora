@@ -90,6 +90,20 @@ export async function getProject(slug: string): Promise<Project | null> {
   return data ? projectFromRow(data) : null;
 }
 
+/**
+ * Fork a template into a new group-owned campaign (deep copy via the
+ * fork_template RPC). Returns the new campaign's slug.
+ */
+export async function forkTemplate(templateId: string, newName: string): Promise<string> {
+  const db = await createSsrClient();
+  const { data, error } = await db.rpc('fork_template', {
+    p_template_id: templateId,
+    p_new_name: newName,
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
 export async function listProjects(): Promise<Project[]> {
   const db = await createSsrClient();
   const { data, error } = await db.from('projects').select().order('name');

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect } from "react";
+import EntityExtractor from "./entity-extractor";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -13,14 +14,45 @@ interface Usage {
   estimatedCostUsd?: number;
 }
 
+interface ModelInfo { id: string; vision?: boolean }
+
 // Provider → models offered in the picker. First entry is the default.
-const PROVIDER_MODELS: Record<string, { label: string; models: string[] }> = {
-  groq:       { label: "Groq",       models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"] },
-  openrouter: { label: "OpenRouter", models: ["anthropic/claude-sonnet-4-6", "openai/gpt-4o", "google/gemini-2.0-flash-001"] },
-  anthropic:  { label: "Anthropic",  models: ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"] },
-  openai:     { label: "OpenAI",     models: ["gpt-4o", "gpt-4o-mini"] },
-  ollama:     { label: "Ollama",     models: ["llama3.2"] },
+// `vision: true` marks models that accept image input (gates the attach button).
+const PROVIDER_MODELS: Record<string, { label: string; models: ModelInfo[] }> = {
+  groq: { label: "Groq", models: [
+    { id: "llama-3.3-70b-versatile" },
+    { id: "llama-3.1-8b-instant" },
+    { id: "llama-3.2-90b-vision-preview", vision: true },
+  ] },
+  openrouter: { label: "OpenRouter", models: [
+    { id: "anthropic/claude-sonnet-4-6", vision: true },
+    { id: "openai/gpt-4o", vision: true },
+    { id: "google/gemini-2.0-flash-001", vision: true },
+  ] },
+  anthropic: { label: "Anthropic", models: [
+    { id: "claude-sonnet-4-6", vision: true },
+    { id: "claude-haiku-4-5-20251001", vision: true },
+  ] },
+  openai: { label: "OpenAI", models: [
+    { id: "gpt-4o", vision: true },
+    { id: "gpt-4o-mini", vision: true },
+  ] },
+  ollama: { label: "Ollama", models: [
+    { id: "llama3.2" },
+    { id: "llava", vision: true },
+  ] },
 };
+
+interface Attachment { dataUrl: string; name: string }
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(new Error("Could not read image"));
+    r.readAsDataURL(file);
+  });
+}
 
 export default function StudioChat({
   projectSlug,
@@ -37,12 +69,29 @@ export default function StudioChat({
   const [error, setError] = useState("");
   const [lastUsage, setLastUsage] = useState<Usage | null>(null);
   const [provider, setProvider] = useState("groq");
-  const [model, setModel] = useState(PROVIDER_MODELS.groq.models[0]);
+  const [model, setModel] = useState(PROVIDER_MODELS.groq.models[0].id);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [extractText, setExtractText] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const visionCapable = !!PROVIDER_MODELS[provider]?.models.find((m) => m.id === model)?.vision;
 
   function changeProvider(p: string) {
     setProvider(p);
-    setModel(PROVIDER_MODELS[p].models[0]);
+    setModel(PROVIDER_MODELS[p].models[0].id);
+    setAttachments([]);
+  }
+
+  async function addImages(files: FileList | null) {
+    if (!files) return;
+    const next: Attachment[] = [];
+    for (const f of Array.from(files)) {
+      if (!f.type.startsWith("image/")) continue;
+      if (f.size > 5 * 1024 * 1024) { setError("Images must be under 5MB."); continue; }
+      next.push({ dataUrl: await readAsDataUrl(f), name: f.name });
+    }
+    setAttachments((prev) => [...prev, ...next].slice(0, 4));
   }
 
   useEffect(() => {
@@ -53,10 +102,13 @@ export default function StudioChat({
     const text = input.trim();
     if (!text || streaming) return;
 
-    const next: ChatMessage[] = [...messages, { role: "user", content: text }];
+    const images = attachments.map((a) => a.dataUrl);
+    const userLabel = images.length ? `${text}  📎×${images.length}` : text;
+    const next: ChatMessage[] = [...messages, { role: "user", content: userLabel }];
     setMessages(next);
     setInput("");
     setError("");
+    setAttachments([]);
     setStreaming(true);
     setMessages((m) => [...m, { role: "assistant", content: "" }]);
 
@@ -64,7 +116,13 @@ export default function StudioChat({
       const res = await fetch(`/api/projects/${projectSlug}/studio/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next, editorText: getEditorText(), provider, model }),
+        // Send raw text (not the label) for the model; images travel separately.
+        body: JSON.stringify({
+          messages: [...messages, { role: "user", content: text }],
+          editorText: getEditorText(),
+          provider, model,
+          images,
+        }),
       });
 
       if (!res.ok || !res.body) {
@@ -144,7 +202,7 @@ export default function StudioChat({
             className="min-w-0 flex-1 rounded-sm border border-stone-200 bg-white px-2 py-1 text-xs text-stone-600 focus:border-stone-400 focus:outline-none disabled:opacity-50"
           >
             {PROVIDER_MODELS[provider].models.map((m) => (
-              <option key={m} value={m}>{m}</option>
+              <option key={m.id} value={m.id}>{m.id}{m.vision ? " 👁" : ""}</option>
             ))}
           </select>
         </div>
@@ -176,12 +234,20 @@ export default function StudioChat({
                 {m.content || (streaming && i === messages.length - 1 ? "…" : "")}
               </div>
               {m.role === "assistant" && m.content && !streaming && (
-                <button
-                  onClick={() => onInsert(m.content)}
-                  className="mt-2 text-xs text-stone-400 opacity-0 transition-opacity hover:text-stone-700 group-hover:opacity-100"
-                >
-                  ↵ Insert into draft
-                </button>
+                <div className="mt-2 flex gap-3 opacity-0 transition-opacity group-hover:opacity-100">
+                  <button
+                    onClick={() => onInsert(m.content)}
+                    className="text-xs text-stone-400 transition-colors hover:text-stone-700"
+                  >
+                    ↵ Insert into draft
+                  </button>
+                  <button
+                    onClick={() => setExtractText(m.content)}
+                    className="text-xs text-stone-400 transition-colors hover:text-stone-700"
+                  >
+                    ✦ Extract entities
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -196,7 +262,41 @@ export default function StudioChat({
 
       {/* Input */}
       <div className="border-t border-stone-200 p-3">
+        {/* Attachment thumbnails */}
+        {attachments.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {attachments.map((a, i) => (
+              <div key={i} className="group relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={a.dataUrl} alt={a.name} className="h-12 w-12 rounded-sm border border-stone-200 object-cover" />
+                <button
+                  onClick={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i))}
+                  className="absolute -right-1.5 -top-1.5 grid h-4 w-4 place-items-center rounded-full bg-stone-700 text-[10px] text-white"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="flex items-end gap-2">
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={streaming || !visionCapable}
+            title={visionCapable ? "Attach image" : "Current model doesn't support images — pick a vision model"}
+            className="shrink-0 rounded-sm border border-stone-300 px-2.5 py-2 text-sm text-stone-500 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            📎
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => { addImages(e.target.files); e.target.value = ""; }}
+          />
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -217,6 +317,16 @@ export default function StudioChat({
           </button>
         </div>
       </div>
+
+      {extractText !== null && (
+        <EntityExtractor
+          projectSlug={projectSlug}
+          text={extractText}
+          provider={provider}
+          model={model}
+          onClose={() => setExtractText(null)}
+        />
+      )}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import Link from "next/link";
 import Nav from "@/components/nav";
 import RelationsSection from "@/components/relations-section";
 import DeleteEntityBtn from "@/components/delete-entity-btn";
+import Markdown from "@/components/markdown";
 import { createSsrClient } from "@/lib/supabase/ssr";
 import type { EntityType } from "@/lib/types";
 
@@ -112,6 +113,7 @@ export default async function EntityDetailPage({
   const colors = TYPE_COLORS[type] ?? TYPE_COLORS.character;
   const appearance = type === "character" ? String((fm.traits as Record<string,unknown> | undefined)?.appearance ?? "") : "";
   const premise = type === "scenario" ? String((fm.game as Record<string,unknown> | undefined)?.premise ?? "") : "";
+  const image = typeof fm.image === "string" ? fm.image : "";
 
   return (
     <div className="flex min-h-screen flex-col bg-[#faf8f5]">
@@ -131,6 +133,11 @@ export default async function EntityDetailPage({
                   {entity.visibility === "gm_only" ? "GM Only" : "Private"}
                 </span>
               )}
+              {fm.reveal === "secret" && (
+                <span className="rounded-sm border border-purple-200 bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700" title="Hidden from players until revealed during a session">
+                  🔒 Secret
+                </span>
+              )}
             </div>
             <h1 className="font-display text-3xl font-semibold text-stone-900">{entity.name}</h1>
             {appearance && <p className="mt-1 text-sm italic text-stone-500">{appearance}</p>}
@@ -145,6 +152,14 @@ export default async function EntityDetailPage({
             <DeleteEntityBtn projectSlug={slug} entityType={type} entitySlug={entitySlug} />
           </div>
         </div>
+
+        {/* Hero image */}
+        {image && (
+          <div className="mb-8 overflow-hidden rounded-sm border border-stone-200 bg-white">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={image} alt={entity.name} className="max-h-96 w-full object-cover" />
+          </div>
+        )}
 
         {/* Metadata */}
         {meta.some(([, v]) => v) && (
@@ -165,9 +180,7 @@ export default async function EntityDetailPage({
         {entity.content && (
           <section className="mb-8 rounded-sm border border-stone-200 bg-white p-6 paper">
             <h2 className="mb-4 text-xs font-medium uppercase tracking-wider text-stone-400">Notes</h2>
-            <div className="font-display text-base leading-relaxed text-stone-800 whitespace-pre-wrap">
-              {entity.content}
-            </div>
+            <Markdown>{entity.content}</Markdown>
           </section>
         )}
 
@@ -178,9 +191,7 @@ export default async function EntityDetailPage({
               <span className="rounded-sm bg-stone-200 px-1.5 py-0.5 text-stone-600">GM</span>
               Secrets
             </h2>
-            <div className="font-display text-base leading-relaxed text-stone-700 italic whitespace-pre-wrap">
-              {entity.secrets}
-            </div>
+            <Markdown className="italic text-stone-700">{entity.secrets}</Markdown>
           </section>
         )}
 

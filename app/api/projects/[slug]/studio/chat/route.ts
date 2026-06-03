@@ -1,7 +1,7 @@
 import { createSsrClient } from "@/lib/supabase/ssr";
 import { stream, streamToResponse } from "@/lib/ai";
 import { extractReferences, formatReferenceContext } from "@/lib/references";
-import type { Message, Provider } from "@/lib/ai";
+import type { Message, Provider, ContentPart } from "@/lib/ai";
 
 interface ChatBody {
   messages: Message[];
@@ -9,6 +9,8 @@ interface ChatBody {
   editorText?: string;
   provider?: Provider;
   model?: string;
+  /** Image data URLs to attach to the latest user message (vision models). */
+  images?: string[];
 }
 
 const SYSTEM_PREAMBLE = `You are a collaborative story-writing assistant inside Eidora, a workspace for crafting interactive fiction and text-based games (detective mysteries, turtle-soup puzzles, Call-of-Cthulhu-style scenarios).
@@ -97,6 +99,20 @@ export async function POST(
 
   // Strip any client-sent system messages; we control the system prompt.
   const messages = body.messages.filter((m) => m.role !== "system");
+
+  // Attach images (if any) to the last user message as multimodal content.
+  if (body.images?.length) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role !== "user") continue;
+      const text = typeof messages[i].content === "string" ? (messages[i].content as string) : "";
+      const parts: ContentPart[] = [
+        ...(text ? [{ type: "text" as const, text }] : []),
+        ...body.images.map((url) => ({ type: "image" as const, url })),
+      ];
+      messages[i] = { role: "user", content: parts };
+      break;
+    }
+  }
 
   try {
     const gen = stream({

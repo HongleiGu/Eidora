@@ -348,6 +348,108 @@ the file-level `visibility` field.
 
 ---
 
+## Reveal system (EID-93)
+
+`visibility` is the **static** authoring tier (above). `reveal` is a **dynamic,
+play-time gate** layered on top — a *universal capability* on any entity, not a
+new type. A "manuscript" is just `reveal: public`; a "secret" is `reveal: secret`.
+
+```yaml
+# entity front-matter
+reveal: public   # default — visible whenever visibility allows
+reveal: secret   # hidden from players until revealed during a session
+```
+
+**Reveal is manual** (v1): a secret stays hidden until something calls the reveal
+handler. That "something" is either a human GM or an **AI GM** — both call the same
+handler, so no condition DSL is needed; the revealer decides when.
+
+**Where revealed-state lives:** per session, in `session_flags` under the key
+`reveal:<entityType>:<slug>`. Revealing is session-scoped, so the same secret can
+be hidden in one playthrough and revealed in another. Base entities never change.
+
+**Player visibility (during a session)** = all of:
+- `visibility === 'public'` (gm_only / author_only never reach players), AND
+- `reveal !== 'secret'` OR the reveal flag is set for this session.
+
+**Handler (`lib/sessions`):** `revealEntity` / `unrevealEntity` / `isRevealed` /
+`listRevealed`, plus `visibleToPlayer(entity, revealedKeys)`. The AI GM (future,
+server-side) imports `revealEntity` directly; a human GM gets a reveal button in
+the Play surface (future epic). EID-93 lays this rail; the player-facing payoff
+arrives with the Play surface.
+
+---
+
+## Play surface
+
+Turns authored content + the session engine into a playable game. **v1 is
+single-player + AI GM**, designed so multiplayer can be added without reworking
+the loop.
+
+### Principles
+
+- **The session log is the source of truth.** Play is an append-only event log
+  (`session_log`); the UI renders from it. State (flags, overrides, reveals) is
+  derived/applied alongside.
+- **Transport-agnostic.** v1 is plain request/response (no real-time). Multiplayer
+  later adds a *delivery* layer over the log (Supabase Realtime, or a dedicated
+  pub/sub at scale — TBD) **without changing the turn loop**.
+- **AI GM via structured directives.** The GM turn is a structured (non-streaming)
+  AI call returning `{ narration, actions[] }` — reliable JSON, every provider,
+  no tool-use needed. Streaming is a later enhancement.
+- **Human can step in.** A role-gated GM panel (gm/admin) exposes the solution,
+  all entities, and manual controls (reveal, set flag, override) — same handlers
+  the AI calls.
+
+### The turn loop
+
+1. Player message → append to log (`role: player`).
+2. Server assembles **GM context**: scenario premise + **solution/secrets** (the GM
+   knows all), the full cast (incl. gm_only), current state (flags, overrides,
+   revealed set), recent log, and game-type guidance.
+3. One AI call → `{ narration, actions }`.
+4. Apply `actions` via the engine; append `narration` to log (`role: agent`).
+5. Client re-renders from the updated log + player-visible state.
+
+### Directive vocabulary (`actions[]`)
+
+| Action | Effect (engine handler) |
+|---|---|
+| `{type:"reveal", target:"type:slug"}` | `revealEntity` — unhide a secret to players |
+| `{type:"flag", key, value}` | `setFlag` — set game state |
+| `{type:"override", entity:"type:slug", set:{…}}` | `setEntityOverride` — e.g. `status: dead` |
+| `{type:"end", outcome:"solved"|"failed"|"ended"}` | mark the session concluded |
+
+### Views
+
+- **Player view**: the chat log, an input, a "discovered" panel (revealed entities),
+  the public premise. Filtered by `visibleToPlayer` — players never see gm_only or
+  un-revealed secrets.
+- **GM panel** (gm/admin, opt-in toggle): solution, every entity, manual
+  reveal/flag/override buttons. Off by default so a solo author doesn't spoil
+  themselves.
+
+### Game-type flow
+
+One adaptive loop; the GM's system prompt specialises by `gameType`
+(detective = investigate + accuse; turtle_soup = answer yes/no/irrelevant;
+coc = dread + sanity; story = narrative; sandbox = open). No bespoke per-type UIs
+in v1 beyond prompt guidance.
+
+### Lifecycle & routes
+
+- `/projects/[slug]/play` — session list + "New session" (pick a scenario).
+- `/projects/[slug]/play/[sessionId]` — the play screen.
+- Sessions are project-scoped (campaign normally; a template can be playtested).
+- Resumable: the log + state persist; reopen to continue.
+
+### Deferred to later
+
+Multiplayer (presence + live delivery over the log), streaming GM narration,
+native tool-calling, and bespoke per-game-type mechanics.
+
+---
+
 ## Key design decisions
 
 | Decision | Choice | Reason |
